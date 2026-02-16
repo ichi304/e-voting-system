@@ -14,6 +14,7 @@ const AdminPage = {
         <div class="tabs" id="admin-tabs">
           <button class="tab ${this.activeTab === 'elections' ? 'active' : ''}" onclick="AdminPage.switchTab('elections')">📋 投票管理</button>
           <button class="tab ${this.activeTab === 'create' ? 'active' : ''}" onclick="AdminPage.switchTab('create')">➕ 新規作成</button>
+          <button class="tab ${this.activeTab === 'import' ? 'active' : ''}" onclick="AdminPage.switchTab('import')">📥 CSVインポート</button>
           <button class="tab ${this.activeTab === 'reset' ? 'active' : ''}" onclick="AdminPage.switchTab('reset')">🔄 ステータスリセット</button>
           <button class="tab ${this.activeTab === 'reception' ? 'active' : ''}" onclick="AdminPage.switchTab('reception')">📝 受付機能</button>
           <button class="tab ${this.activeTab === 'audit' ? 'active' : ''}" onclick="AdminPage.switchTab('audit')">📜 監査ログ</button>
@@ -43,6 +44,7 @@ const AdminPage = {
     switch (this.activeTab) {
       case 'elections': await this.loadElections(); break;
       case 'create': this.showCreateForm(); break;
+      case 'import': this.showImportForm(); break;
       case 'reset': await this.showResetForm(); break;
       case 'reception': await this.loadReception(); break;
       case 'audit': await this.loadAuditLogs(); break;
@@ -718,6 +720,168 @@ const AdminPage = {
       `;
     } catch (err) {
       contentEl.innerHTML = `<div class="empty-state"><p class="text-danger">${Components.escapeHtml(err.message)}</p></div>`;
+    }
+  },
+
+  // ===== CSVインポート =====
+  showImportForm() {
+    const contentEl = document.getElementById('admin-content');
+    contentEl.innerHTML = `
+      <div class="card" style="max-width: 720px;">
+        <div class="card-header">
+          <div class="card-title">📥 組合員CSVインポート</div>
+        </div>
+
+        <div style="padding: 1rem; background: var(--color-bg-glass); border-radius: var(--radius-md); margin-bottom: 1.5rem;">
+          <div class="form-label" style="margin-bottom: 0.5rem;">📋 CSVフォーマット</div>
+          <code style="font-size: 0.85rem; color: var(--color-text-secondary);">employee_id,birthdate,name,role</code><br>
+          <code style="font-size: 0.85rem; color: var(--color-text-secondary);">EMP0001,19900607,田中 太郎,voter</code>
+          <div style="margin-top: 0.5rem; font-size: 0.8rem; color: var(--color-text-muted);">
+            ※ role: admin / reception / voter<br>
+            ※ birthdate: 8桁の数字（YYYYMMDD）
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">CSVファイルを選択</label>
+          <input type="file" id="csv-file-input" accept=".csv" onchange="AdminPage.previewCSV()"
+            style="width:100%; padding:0.75rem; border:2px dashed var(--color-border); border-radius:var(--radius-md); cursor:pointer;">
+        </div>
+
+        <div id="csv-preview" style="display:none; margin-top:1rem;">
+          <div class="form-label">📊 プレビュー</div>
+          <div id="csv-preview-content" style="max-height: 300px; overflow-y: auto; font-size: 0.85rem; background: var(--color-bg-glass); padding: 1rem; border-radius: var(--radius-md);"></div>
+        </div>
+
+        <div class="form-group" style="margin-top: 1.5rem;">
+          <label class="form-label">インポートモード</label>
+          <select id="import-mode" class="form-select">
+            <option value="append">追加モード（既存メンバーを保持して追加/更新）</option>
+            <option value="replace">置換モード（管理者以外を全削除してから登録）</option>
+          </select>
+          <div style="margin-top: 0.5rem; font-size: 0.8rem; color: var(--color-warning);">
+            ⚠️ 置換モードを選択すると、管理者以外の既存メンバーが全て削除されます。
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+          <button class="btn btn-primary" id="import-btn" onclick="AdminPage.executeImport()" disabled>
+            📥 インポート実行
+          </button>
+          <button class="btn btn-outline" onclick="AdminPage.resetMembers()">
+            🗑️ 全メンバーリセット
+          </button>
+        </div>
+
+        <div id="import-result" style="margin-top: 1.5rem;"></div>
+      </div>
+    `;
+  },
+
+  async previewCSV() {
+    const fileInput = document.getElementById('csv-file-input');
+    const previewDiv = document.getElementById('csv-preview');
+    const previewContent = document.getElementById('csv-preview-content');
+    const importBtn = document.getElementById('import-btn');
+
+    if (!fileInput.files || fileInput.files.length === 0) return;
+
+    const file = fileInput.files[0];
+    const text = await file.text();
+    const lines = text.trim().split('\n').map(l => l.replace(/\r/g, ''));
+
+    const totalLines = lines.length - 1; // ヘッダー除く
+    const previewLines = lines.slice(0, 11); // ヘッダー + 10件
+
+    let html = `<div style="margin-bottom: 0.75rem; font-weight: 600;">合計: ${totalLines}件のデータ</div>`;
+    html += '<table class="data-table" style="font-size: 0.8rem;"><thead><tr>';
+
+    const headers = previewLines[0].split(',');
+    headers.forEach(h => { html += `<th>${Components.escapeHtml(h.trim())}</th>`; });
+    html += '</tr></thead><tbody>';
+
+    for (let i = 1; i < previewLines.length; i++) {
+      html += '<tr>';
+      const cols = previewLines[i].split(',');
+      cols.forEach(c => { html += `<td>${Components.escapeHtml(c.trim())}</td>`; });
+      html += '</tr>';
+    }
+
+    if (totalLines > 10) {
+      html += `<tr><td colspan="${headers.length}" style="text-align:center; color: var(--color-text-muted);">... 他${totalLines - 10}件</td></tr>`;
+    }
+
+    html += '</tbody></table>';
+
+    previewContent.innerHTML = html;
+    previewDiv.style.display = 'block';
+    importBtn.disabled = false;
+  },
+
+  async executeImport() {
+    const fileInput = document.getElementById('csv-file-input');
+    const mode = document.getElementById('import-mode').value;
+    const resultDiv = document.getElementById('import-result');
+    const importBtn = document.getElementById('import-btn');
+
+    if (!fileInput.files || fileInput.files.length === 0) {
+      Components.showToast('CSVファイルを選択してください。', 'error');
+      return;
+    }
+
+    if (mode === 'replace') {
+      if (!confirm('⚠️ 置換モード：管理者以外の既存メンバーを全て削除して、CSVのデータで置き換えます。\n\nよろしいですか？')) {
+        return;
+      }
+    }
+
+    importBtn.disabled = true;
+    importBtn.innerHTML = '<span class="spinner"></span> インポート中...';
+
+    try {
+      const csv_data = await fileInput.files[0].text();
+      const result = await API.post('/admin/import-members', { csv_data, mode });
+
+      let html = `
+        <div class="card" style="background: var(--color-success-bg); border-color: var(--color-success);">
+          <div style="font-weight: 600; margin-bottom: 0.5rem;">✅ ${Components.escapeHtml(result.message)}</div>
+          <div style="font-size: 0.9rem;">
+            <div>登録/更新: <strong>${result.stats.inserted}名</strong></div>
+            <div>スキップ: <strong>${result.stats.skipped}名</strong></div>
+            ${result.stats.deleted > 0 ? `<div>削除: <strong>${result.stats.deleted}名</strong></div>` : ''}
+          </div>
+      `;
+
+      if (result.stats.errors && result.stats.errors.length > 0) {
+        html += `<div style="margin-top: 0.5rem; color: var(--color-warning); font-size: 0.85rem;">`;
+        html += '<div>⚠️ エラー:</div>';
+        result.stats.errors.forEach(e => { html += `<div>・${Components.escapeHtml(e)}</div>`; });
+        html += '</div>';
+      }
+
+      html += '</div>';
+      resultDiv.innerHTML = html;
+    } catch (err) {
+      resultDiv.innerHTML = `<div class="text-danger">❌ ${Components.escapeHtml(err.message)}</div>`;
+    }
+
+    importBtn.disabled = false;
+    importBtn.innerHTML = '📥 インポート実行';
+  },
+
+  async resetMembers() {
+    if (!confirm('⚠️ 管理者以外の全メンバーを削除します。\n投票ステータスも全てリセットされます。\n\n本当によろしいですか？')) {
+      return;
+    }
+    if (!confirm('⚠️⚠️ 最終確認です。この操作は元に戻せません。\n\n実行しますか？')) {
+      return;
+    }
+
+    try {
+      const result = await API.delete('/admin/members/reset');
+      Components.showToast(result.message, 'success');
+    } catch (err) {
+      Components.showToast(err.message, 'error');
     }
   }
 };

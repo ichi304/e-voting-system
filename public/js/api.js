@@ -72,5 +72,9 @@ const API = {
 
     put(endpoint, data) {
         return this.request('PUT', endpoint, data);
+    },
+
+    delete(endpoint) {
+        return this.request('DELETE', endpoint);
     }
 };

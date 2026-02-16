@@ -336,4 +336,137 @@ router.get('/members', authenticateToken, requireRole('admin'), async (req, res)
     }
 });
 
+// POST /api/admin/import-members - CSVインポート
+router.post('/import-members', authenticateToken, requireRole('admin'), async (req, res) => {
+    try {
+        const { csv_data, mode } = req.body;
+        // mode: 'append' = 追加, 'replace' = 既存を全削除して置換
+
+        if (!csv_data || csv_data.trim().length === 0) {
+            return res.status(400).json({ error: 'CSVデータが空です。' });
+        }
+
+        const lines = csv_data.trim().split('\n').map(l => l.replace(/\r/g, ''));
+        const header = lines[0].toLowerCase();
+
+        // ヘッダー検証
+        if (!header.includes('employee_id') || !header.includes('name')) {
+            return res.status(400).json({
+                error: 'CSVヘッダーが不正です。employee_id, birthdate, name, role が必要です。'
+            });
+        }
+
+        const headers = header.split(',').map(h => h.trim());
+        const idIdx = headers.indexOf('employee_id');
+        const birthIdx = headers.indexOf('birthdate');
+        const nameIdx = headers.indexOf('name');
+        const roleIdx = headers.indexOf('role');
+
+        if (idIdx === -1 || nameIdx === -1) {
+            return res.status(400).json({ error: 'employee_id, name 列が必要です。' });
+        }
+
+        // データ行をパース
+        const members = [];
+        const errors = [];
+        for (let i = 1; i < lines.length; i++) {
+            if (lines[i].trim().length === 0) continue;
+            const cols = lines[i].split(',').map(c => c.trim());
+
+            const empId = cols[idIdx];
+            const birthdate = birthIdx !== -1 ? cols[birthIdx] : '19900101';
+            const name = cols[nameIdx];
+            const role = roleIdx !== -1 ? cols[roleIdx] : 'voter';
+
+            if (!empId || !name) {
+                errors.push(`行${i + 1}: employee_id または name が空です`);
+                continue;
+            }
+            if (!['admin', 'reception', 'voter'].includes(role)) {
+                errors.push(`行${i + 1}: role が不正です (${role})`);
+                continue;
+            }
+            if (birthdate && !/^\d{8}$/.test(birthdate)) {
+                errors.push(`行${i + 1}: birthdate の形式が不正です (${birthdate})`);
+                continue;
+            }
+
+            members.push({ employee_id: empId, birthdate, name, role });
+        }
+
+        if (members.length === 0) {
+            return res.status(400).json({ error: '有効なデータがありません。', details: errors });
+        }
+
+        // 置換モードの場合、管理者以外を削除
+        let deletedCount = 0;
+        if (mode === 'replace') {
+            const beforeCount = await dbGet("SELECT COUNT(*) as count FROM members");
+            await dbRun("DELETE FROM members WHERE role != 'admin'");
+            deletedCount = parseInt(beforeCount.count);
+        }
+
+        // メンバー登録
+        let inserted = 0;
+        let skipped = 0;
+        for (const m of members) {
+            try {
+                const existing = await dbGet('SELECT employee_id FROM members WHERE employee_id = ?', [m.employee_id]);
+                if (existing) {
+                    // 既存メンバーは更新
+                    await dbRun('UPDATE members SET birthdate = ?, name = ?, role = ? WHERE employee_id = ?',
+                        [m.birthdate, m.name, m.role, m.employee_id]);
+                    inserted++;
+                } else {
+                    await dbRun('INSERT INTO members (employee_id, birthdate, name, role) VALUES (?, ?, ?, ?)',
+                        [m.employee_id, m.birthdate, m.name, m.role]);
+                    inserted++;
+                }
+            } catch (e) {
+                skipped++;
+                errors.push(`${m.employee_id}: ${e.message}`);
+            }
+        }
+
+        await writeAuditLog({
+            action: 'members_imported',
+            actorId: req.user.employee_id,
+            details: JSON.stringify({ mode, inserted, skipped, deleted: deletedCount, total_in_csv: members.length }),
+            ipAddress: req.ip
+        });
+
+        res.json({
+            success: true,
+            message: `インポート完了: ${inserted}名登録/更新, ${skipped}名スキップ`,
+            stats: { inserted, skipped, deleted: deletedCount, errors: errors.slice(0, 10) }
+        });
+    } catch (err) {
+        console.error('CSVインポートエラー:', err);
+        res.status(500).json({ error: 'インポート中にエラーが発生しました。' });
+    }
+});
+
+// DELETE /api/admin/members/reset - 全メンバーリセット（管理者以外）
+router.delete('/members/reset', authenticateToken, requireRole('admin'), async (req, res) => {
+    try {
+        const countRow = await dbGet("SELECT COUNT(*) as count FROM members WHERE role != 'admin'");
+        const count = parseInt(countRow.count);
+
+        await dbRun("DELETE FROM voting_status");
+        await dbRun("DELETE FROM members WHERE role != 'admin'");
+
+        await writeAuditLog({
+            action: 'members_reset',
+            actorId: req.user.employee_id,
+            details: JSON.stringify({ deleted_count: count }),
+            ipAddress: req.ip
+        });
+
+        res.json({ success: true, message: `${count}名のメンバーを削除しました（管理者は保持）。` });
+    } catch (err) {
+        console.error('リセットエラー:', err);
+        res.status(500).json({ error: 'サーバーエラー' });
+    }
+});
+
 module.exports = router;
