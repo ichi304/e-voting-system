@@ -1,45 +1,66 @@
-const initSqlJs = require('sql.js');
-const path = require('path');
-const fs = require('fs');
+const { Pool } = require('pg');
 
-const DB_DIR = path.join(__dirname, '..', 'data');
+let pool = null;
 
-// データディレクトリの作成
-if (!fs.existsSync(DB_DIR)) {
-  fs.mkdirSync(DB_DIR, { recursive: true });
+// SQLite の ? プレースホルダーを PostgreSQL の $1, $2, ... に変換
+function convertPlaceholders(sql) {
+  let idx = 0;
+  return sql.replace(/\?/g, () => `$${++idx}`);
 }
 
-const ROSTER_PATH = path.join(DB_DIR, 'roster.db');
-const BALLOT_PATH = path.join(DB_DIR, 'ballotbox.db');
-const AUDIT_PATH = path.join(DB_DIR, 'audit.db');
-
-let rosterDb, ballotDb, auditDb;
-let initialized = false;
+// SQLite 構文を PostgreSQL 構文に変換
+function convertSql(sql) {
+  let converted = convertPlaceholders(sql);
+  converted = converted.replace(/INSERT OR IGNORE/gi, 'INSERT');
+  // ON CONFLICT DO NOTHING を追加（INSERT文のみ）
+  if (/^INSERT/i.test(converted.trim()) && !/ON CONFLICT/i.test(converted)) {
+    converted = converted.replace(/\)\s*$/, ') ON CONFLICT DO NOTHING');
+    // VALUES(...) で終わるパターン
+    if (!/ON CONFLICT/i.test(converted)) {
+      converted += ' ON CONFLICT DO NOTHING';
+    }
+  }
+  converted = converted.replace(/datetime\('now',\s*'localtime'\)/gi, 'CURRENT_TIMESTAMP');
+  return converted;
+}
 
 async function initDatabases() {
-  if (initialized) return { rosterDb, ballotDb, auditDb };
+  const connectionString = process.env.DATABASE_URL;
 
-  const SQL = await initSqlJs();
-
-  // ===== 名簿DB =====
-  if (fs.existsSync(ROSTER_PATH)) {
-    const buffer = fs.readFileSync(ROSTER_PATH);
-    rosterDb = new SQL.Database(buffer);
-  } else {
-    rosterDb = new SQL.Database();
+  if (!connectionString) {
+    console.error('❌ DATABASE_URL が設定されていません。');
+    console.log('ローカル開発の場合: DATABASE_URL=postgresql://user:pass@localhost:5432/evoting');
+    process.exit(1);
   }
 
-  rosterDb.run(`
+  pool = new Pool({
+    connectionString,
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    max: 10,
+  });
+
+  // 接続テスト
+  try {
+    const client = await pool.connect();
+    console.log('✅ PostgreSQL に接続しました');
+    client.release();
+  } catch (err) {
+    console.error('❌ PostgreSQL 接続エラー:', err.message);
+    process.exit(1);
+  }
+
+  // テーブル作成
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS members (
       employee_id TEXT PRIMARY KEY,
       birthdate TEXT NOT NULL,
       name TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'voter' CHECK(role IN ('admin', 'reception', 'voter')),
-      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
-  rosterDb.run(`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS elections (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -48,146 +69,93 @@ async function initDatabases() {
       start_datetime TEXT NOT NULL,
       end_datetime TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'upcoming' CHECK(status IN ('upcoming', 'active', 'closed', 'counted')),
-      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
-  rosterDb.run(`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS election_candidates (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      election_id TEXT NOT NULL,
+      id SERIAL PRIMARY KEY,
+      election_id TEXT NOT NULL REFERENCES elections(id),
       candidate_name TEXT NOT NULL,
       candidate_description TEXT,
-      display_order INTEGER NOT NULL DEFAULT 0,
-      FOREIGN KEY (election_id) REFERENCES elections(id)
+      display_order INTEGER DEFAULT 0
     )
   `);
 
-  rosterDb.run(`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS voting_status (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
       election_id TEXT NOT NULL,
       employee_id TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'not_voted' CHECK(status IN ('not_voted', 'voted_electronic', 'voted_paper')),
-      updated_at TEXT DEFAULT (datetime('now', 'localtime')),
-      FOREIGN KEY (election_id) REFERENCES elections(id),
-      FOREIGN KEY (employee_id) REFERENCES members(employee_id),
-      UNIQUE(election_id, employee_id)
+      voted_at TIMESTAMP,
+      PRIMARY KEY (election_id, employee_id)
     )
   `);
 
-  // ===== 投票箱DB（名簿DBとの紐付け用外部キーやIDを一切持たない） =====
-  if (fs.existsSync(BALLOT_PATH)) {
-    const buffer = fs.readFileSync(BALLOT_PATH);
-    ballotDb = new SQL.Database(buffer);
-  } else {
-    ballotDb = new SQL.Database();
-  }
-
-  ballotDb.run(`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS votes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id TEXT PRIMARY KEY,
       election_id TEXT NOT NULL,
       selected_candidate TEXT NOT NULL,
-      voted_at TEXT DEFAULT (datetime('now', 'localtime'))
+      voted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
-  // ===== 監査ログDB =====
-  if (fs.existsSync(AUDIT_PATH)) {
-    const buffer = fs.readFileSync(AUDIT_PATH);
-    auditDb = new SQL.Database(buffer);
-  } else {
-    auditDb = new SQL.Database();
-  }
-
-  auditDb.run(`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS audit_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      timestamp TEXT DEFAULT (datetime('now', 'localtime')),
-      actor_id TEXT NOT NULL,
-      actor_role TEXT NOT NULL,
+      id SERIAL PRIMARY KEY,
+      timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       action TEXT NOT NULL,
+      actor_id TEXT,
       target_employee_id TEXT,
       election_id TEXT,
       reason TEXT,
-      details TEXT,
-      ip_address TEXT
+      ip_address TEXT,
+      details TEXT
     )
   `);
 
-  initialized = true;
-
-  // 定期的にDBを保存
-  setInterval(() => saveDatabases(), 5000);
-
-  return { rosterDb, ballotDb, auditDb };
+  console.log('✅ テーブルの初期化が完了しました');
 }
 
-function saveDatabases() {
-  try {
-    if (rosterDb) {
-      const data = rosterDb.export();
-      fs.writeFileSync(ROSTER_PATH, Buffer.from(data));
-    }
-    if (ballotDb) {
-      const data = ballotDb.export();
-      fs.writeFileSync(BALLOT_PATH, Buffer.from(data));
-    }
-    if (auditDb) {
-      const data = auditDb.export();
-      fs.writeFileSync(AUDIT_PATH, Buffer.from(data));
-    }
-  } catch (err) {
-    console.error('DB保存エラー:', err);
-  }
+function getPool() {
+  return pool;
 }
 
-// DB ヘルパー関数
-function dbAll(db, sql, params = []) {
-  const stmt = db.prepare(sql);
-  if (params.length > 0) stmt.bind(params);
-  const results = [];
-  while (stmt.step()) {
-    results.push(stmt.getAsObject());
-  }
-  stmt.free();
-  return results;
+// ===== ヘルパー関数（async） =====
+async function dbAll(sql, params = []) {
+  const converted = convertSql(sql);
+  const result = await pool.query(converted, params);
+  return result.rows;
 }
 
-function dbGet(db, sql, params = []) {
-  const results = dbAll(db, sql, params);
-  return results.length > 0 ? results[0] : null;
+async function dbGet(sql, params = []) {
+  const converted = convertSql(sql);
+  const result = await pool.query(converted, params);
+  return result.rows[0] || null;
 }
 
-function dbRun(db, sql, params = []) {
-  db.run(sql, params);
+async function dbRun(sql, params = []) {
+  const converted = convertSql(sql);
+  const result = await pool.query(converted, params);
+  return result;
 }
 
-// 監査ログ記録関数
-function writeAuditLog(entry) {
-  if (!auditDb) return;
-  dbRun(auditDb, `
-    INSERT INTO audit_logs (actor_id, actor_role, action, target_employee_id, election_id, reason, details, ip_address)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `, [
-    entry.actor_id, entry.actor_role, entry.action,
-    entry.target_employee_id || null, entry.election_id || null,
-    entry.reason || null, entry.details || null, entry.ip_address || null
-  ]);
-  saveDatabases();
-}
-
-function getDb() {
-  return { rosterDb, ballotDb, auditDb };
+// ===== 監査ログ =====
+async function writeAuditLog({ action, actorId, targetEmployeeId, electionId, reason, ipAddress, details }) {
+  await dbRun(
+    `INSERT INTO audit_logs (action, actor_id, target_employee_id, election_id, reason, ip_address, details)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [action, actorId || null, targetEmployeeId || null, electionId || null, reason || null, ipAddress || null, details || null]
+  );
 }
 
 module.exports = {
   initDatabases,
-  saveDatabases,
-  getDb,
+  getPool,
   dbAll,
   dbGet,
   dbRun,
-  writeAuditLog
+  writeAuditLog,
 };

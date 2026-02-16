@@ -1,19 +1,18 @@
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
-const { initDatabases, getDb, dbGet } = require('./db/init');
+const { initDatabases, dbGet } = require('./db/init');
 
 async function startServer() {
     // DB初期化
     await initDatabases();
 
     // 初回起動時（DBが空の場合）自動シード
-    const { rosterDb } = getDb();
-    const memberCount = dbGet(rosterDb, "SELECT COUNT(*) as count FROM members");
-    if (!memberCount || memberCount.count === 0) {
+    const memberCount = await dbGet("SELECT COUNT(*) as count FROM members");
+    if (!memberCount || parseInt(memberCount.count) === 0) {
         console.log('📦 初回起動を検出。テストデータを自動投入します...');
-        // seed.js のロジックを直接実行
-        require('./seed-data')();
+        const seedData = require('./seed-data');
+        await seedData();
         console.log('✅ テストデータの投入が完了しました。');
     }
 
