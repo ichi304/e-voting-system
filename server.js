@@ -1,11 +1,21 @@
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
-const { initDatabases } = require('./db/init');
+const { initDatabases, getDb, dbGet } = require('./db/init');
 
 async function startServer() {
     // DB初期化
     await initDatabases();
+
+    // 初回起動時（DBが空の場合）自動シード
+    const { rosterDb } = getDb();
+    const memberCount = dbGet(rosterDb, "SELECT COUNT(*) as count FROM members");
+    if (!memberCount || memberCount.count === 0) {
+        console.log('📦 初回起動を検出。テストデータを自動投入します...');
+        // seed.js のロジックを直接実行
+        require('./seed-data')();
+        console.log('✅ テストデータの投入が完了しました。');
+    }
 
     const app = express();
     const PORT = process.env.PORT || 3000;
@@ -32,7 +42,7 @@ async function startServer() {
         res.status(500).json({ error: 'サーバー内部エラーが発生しました。' });
     });
 
-    app.listen(PORT, () => {
+    app.listen(PORT, '0.0.0.0', () => {
         console.log(`\n🗳️  電子投票システム起動中...`);
         console.log(`📡 サーバーアドレス: http://localhost:${PORT}`);
         console.log(`\n[テストアカウント]`);
