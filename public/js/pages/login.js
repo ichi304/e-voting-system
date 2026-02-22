@@ -27,14 +27,14 @@ const LoginPage = {
                 type="password"
                 id="password"
                 class="form-input"
-                placeholder="4桁の数字"
-                pattern="\\d{4}"
-                maxlength="4"
+                placeholder="5桁の数字"
+                pattern="\\d{5}"
+                maxlength="5"
                 inputmode="numeric"
                 autocomplete="current-password"
                 required
               >
-              <div class="form-hint">管理者から割り振られた半角数字4桁のパスワード</div>
+              <div class="form-hint">管理者から割り振られた半角数字5桁のパスワード</div>
             </div>
             <div id="login-error" class="hidden" style="color: var(--color-danger); font-size: 0.85rem; margin-bottom: 1rem; text-align: center;"></div>
             <button type="submit" id="login-btn" class="btn btn-primary btn-lg btn-block">

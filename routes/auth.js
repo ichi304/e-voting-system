@@ -14,9 +14,9 @@ router.post('/login', async (req, res) => {
 
         const trimmedId = String(employee_id).trim();
 
-        const pinPattern = /^\d{4}$/;
+        const pinPattern = /^\d{5}$/;
         if (!pinPattern.test(password)) {
-            return res.status(400).json({ error: 'ログインパスワードは半角数字4桁で入力してください。' });
+            return res.status(400).json({ error: 'ログインパスワードは半角数字5桁で入力してください。' });
         }
 
         const member = await dbGet('SELECT * FROM members WHERE employee_id = ?', [trimmedId]);

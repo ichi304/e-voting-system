@@ -529,8 +529,8 @@ router.post('/import-members', authenticateToken, requireRole('admin'), async (r
             const cols = lines[i].split(',').map(c => c.trim());
 
             const empId = cols[idIdx];
-            // login_pin列があればそれを使い、なければbirthdate列を使い、それもなければデフォルト
-            let loginPin = '0000';
+            // login_pin列があればそれを使い、なければbirthdate列を使い、それもなければランダム5桁
+            let loginPin = String(Math.floor(10000 + Math.random() * 90000));
             if (pinIdx !== -1) {
                 loginPin = cols[pinIdx];
             } else if (birthIdx !== -1) {
@@ -545,6 +545,10 @@ router.post('/import-members', authenticateToken, requireRole('admin'), async (r
             }
             if (!['admin', 'reception', 'voter'].includes(role)) {
                 errors.push(`行${i + 1}: role が不正です (${role})`);
+                continue;
+            }
+            if (!/^\d{5}$/.test(loginPin)) {
+                errors.push(`行${i + 1}: login_pin は半角数字5桁で指定してください (${empId})`);
                 continue;
             }
 
