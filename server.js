@@ -45,9 +45,9 @@ async function startServer() {
         console.log(`\n🗳️  電子投票システム起動中...`);
         console.log(`📡 サーバーアドレス: http://localhost:${PORT}`);
         console.log(`\n[テストアカウント]`);
-        console.log(`  管理者: ID=ADMIN001 / PW=19800101`);
-        console.log(`  受付:   ID=STAFF001 / PW=19850515`);
-        console.log(`  組合員: ID=EMP0001 / PW=19900607\n`);
+        console.log(`  管理者: ID=ADMIN001 / PIN=0000`);
+        console.log(`  受付:   ID=STAFF001 / PIN=1111`);
+        console.log(`  組合員: ID=EMP0001 / PIN=1001\n`);
     });
 }
 

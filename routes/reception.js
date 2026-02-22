@@ -170,4 +170,36 @@ router.get('/stats/:electionId', authenticateToken, requireRole('reception', 'ad
     }
 });
 
+// GET /api/reception/voting-status/:electionId - 投票状況一覧（受付担当用）
+router.get('/voting-status/:electionId', authenticateToken, requireRole('reception', 'admin'), async (req, res) => {
+    try {
+        const { electionId } = req.params;
+        const { filter } = req.query; // 'all', 'voted', 'not_voted'
+
+        let query = `
+            SELECT m.employee_id, m.name, 
+                   COALESCE(vs.status, 'not_voted') as voting_status,
+                   vs.voted_at
+            FROM members m
+            LEFT JOIN voting_status vs ON m.employee_id = vs.employee_id AND vs.election_id = ?
+            WHERE m.role = 'voter'
+        `;
+
+        if (filter === 'voted') {
+            query += " AND vs.status IN ('voted_electronic', 'voted_paper')";
+        } else if (filter === 'not_voted') {
+            query += " AND (vs.status = 'not_voted' OR vs.status IS NULL)";
+        }
+
+        query += ' ORDER BY m.employee_id ASC';
+
+        const members = await dbAll(query, [electionId]);
+
+        res.json(members);
+    } catch (err) {
+        console.error('投票状況取得エラー:', err);
+        res.status(500).json({ error: 'サーバーエラーが発生しました。' });
+    }
+});
+
 module.exports = router;

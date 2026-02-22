@@ -1572,3 +1572,109 @@ textarea.form-input {
 .gap-2 {
   gap: 1rem;
 }
+
+/* ===== Login Contact Info ===== */
+.login-contact-info {
+  margin-top: 2rem;
+  padding: 1.25rem;
+  background: rgba(59, 130, 246, 0.06);
+  border: 1px solid rgba(59, 130, 246, 0.15);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+.login-contact-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--color-info);
+  margin-bottom: 0.5rem;
+}
+
+.login-contact-info p {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  margin-bottom: 0.5rem;
+}
+
+.login-contact-org {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 0.25rem;
+}
+
+.login-contact-tel {
+  margin-bottom: 0.5rem;
+}
+
+.login-contact-tel a {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--color-accent);
+  text-decoration: none;
+  letter-spacing: 0.05em;
+}
+
+.login-contact-tel a:hover {
+  text-decoration: underline;
+}
+
+.login-contact-note {
+  font-size: 0.75rem !important;
+  color: var(--color-text-muted) !important;
+  line-height: 1.5 !important;
+}
+
+/* ===== Detail Link Banner ===== */
+.detail-link-banner {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(59, 130, 246, 0.08));
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: var(--radius-md);
+  padding: 0.875rem 1rem;
+  margin-top: 0.5rem;
+  transition: all var(--transition-fast);
+}
+
+.detail-link-banner:hover {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(59, 130, 246, 0.12));
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+.detail-link-banner a {
+  color: var(--color-text-accent);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.detail-link-banner a:hover {
+  text-decoration: underline;
+}
+
+/* ===== Additional Button Styles ===== */
+.btn-active {
+  background: var(--color-accent) !important;
+  color: white !important;
+  border-color: var(--color-accent) !important;
+}
+
+.btn-info {
+  background: linear-gradient(135deg, var(--color-info), #2563eb);
+  color: white;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.btn-outline:hover:not(:disabled) {
+  background: var(--color-bg-glass);
+  border-color: var(--color-border-hover);
+}

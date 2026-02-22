@@ -9,24 +9,24 @@ router.post('/login', async (req, res) => {
         const { employee_id, password } = req.body;
 
         if (!employee_id || !password) {
-            return res.status(400).json({ error: '職員番号と生年月日を入力してください。' });
+            return res.status(400).json({ error: '職員番号とログインパスワードを入力してください。' });
         }
 
         const trimmedId = String(employee_id).trim();
 
-        const birthDatePattern = /^\d{8}$/;
-        if (!birthDatePattern.test(password)) {
-            return res.status(400).json({ error: '生年月日は半角数字8桁（例：19900607）で入力してください。' });
+        const pinPattern = /^\d{4}$/;
+        if (!pinPattern.test(password)) {
+            return res.status(400).json({ error: 'ログインパスワードは半角数字4桁で入力してください。' });
         }
 
         const member = await dbGet('SELECT * FROM members WHERE employee_id = ?', [trimmedId]);
 
         if (!member) {
-            return res.status(401).json({ error: '職員番号またはパスワードが正しくありません。' });
+            return res.status(401).json({ error: '職員番号またはログインパスワードが正しくありません。' });
         }
 
-        if (member.birthdate !== password) {
-            return res.status(401).json({ error: '職員番号またはパスワードが正しくありません。' });
+        if (member.login_pin !== password) {
+            return res.status(401).json({ error: '職員番号またはログインパスワードが正しくありません。' });
         }
 
         const token = generateToken({

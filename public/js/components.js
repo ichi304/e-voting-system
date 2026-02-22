@@ -102,7 +102,6 @@ const Components = {
   // 選挙タイプアイコン
   electionTypeIcon(type) {
     const icons = {
-      officer: { icon: '👤', class: 'election-type-officer' },
       strike: { icon: '✊', class: 'election-type-strike' },
       agenda: { icon: '📋', class: 'election-type-agenda' },
       confidence: { icon: '✋', class: 'election-type-confidence' }
@@ -114,7 +113,6 @@ const Components = {
   // 選挙タイプラベル
   electionTypeLabel(type) {
     const labels = {
-      officer: '役員選挙',
       strike: 'ストライキ批准投票',
       agenda: '議案審議投票',
       confidence: '信任投票'

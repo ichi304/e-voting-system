@@ -18,7 +18,7 @@ router.get('/elections', authenticateToken, requireRole('admin'), async (req, re
 // POST /api/admin/elections
 router.post('/elections', authenticateToken, requireRole('admin'), async (req, res) => {
     try {
-        const { title, description, type, start_datetime, end_datetime, candidates } = req.body;
+        const { title, description, type, start_datetime, end_datetime, candidates, detail_url } = req.body;
 
         if (!title || !type || !start_datetime || !end_datetime) {
             return res.status(400).json({ error: '必須項目を入力してください。' });
@@ -33,9 +33,9 @@ router.post('/elections', authenticateToken, requireRole('admin'), async (req, r
         const id = uuidv4();
 
         await dbRun(`
-            INSERT INTO elections (id, title, description, type, start_datetime, end_datetime, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `, [id, title, description || '', type, start_datetime, end_datetime, 'upcoming']);
+            INSERT INTO elections (id, title, description, type, start_datetime, end_datetime, status, detail_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `, [id, title, description || '', type, start_datetime, end_datetime, 'upcoming', detail_url || null]);
 
         for (let i = 0; i < candidates.length; i++) {
             await dbRun(`
@@ -63,7 +63,7 @@ router.post('/elections', authenticateToken, requireRole('admin'), async (req, r
             action: 'election_created',
             actorId: req.user.employee_id,
             electionId: id,
-            details: JSON.stringify({ title, type, start_datetime, end_datetime }),
+            details: JSON.stringify({ title, type, start_datetime, end_datetime, detail_url }),
             ipAddress: req.ip
         });
 
@@ -194,6 +194,7 @@ router.post('/count-votes/:electionId', authenticateToken, requireRole('admin'),
 
         await dbRun("UPDATE elections SET status = 'counted' WHERE id = ?", [electionId]);
 
+        // 電子投票の結果のみ（紙投票結果は別途反映）
         const results = await dbAll(`
             SELECT selected_candidate, COUNT(*) as vote_count
             FROM votes WHERE election_id = ?
@@ -243,11 +244,32 @@ router.get('/results/:electionId', authenticateToken, requireRole('admin'), asyn
             return res.status(400).json({ error: 'この投票はまだ開票されていません。' });
         }
 
-        const results = await dbAll(`
+        // 電子投票の結果
+        const electronicResults = await dbAll(`
             SELECT selected_candidate, COUNT(*) as vote_count
-            FROM votes WHERE election_id = ?
+            FROM votes WHERE election_id = ? AND vote_source = 'electronic'
             GROUP BY selected_candidate ORDER BY vote_count DESC
         `, [electionId]);
+
+        // 紙投票の結果
+        const paperResults = await dbAll(`
+            SELECT candidate_name as selected_candidate, SUM(vote_count) as vote_count
+            FROM paper_vote_results WHERE election_id = ?
+            GROUP BY candidate_name ORDER BY vote_count DESC
+        `, [electionId]);
+
+        // 合算した結果
+        const combinedMap = {};
+        electronicResults.forEach(r => {
+            combinedMap[r.selected_candidate] = (combinedMap[r.selected_candidate] || 0) + parseInt(r.vote_count);
+        });
+        paperResults.forEach(r => {
+            combinedMap[r.selected_candidate] = (combinedMap[r.selected_candidate] || 0) + parseInt(r.vote_count);
+        });
+
+        const results = Object.entries(combinedMap)
+            .map(([selected_candidate, vote_count]) => ({ selected_candidate, vote_count }))
+            .sort((a, b) => b.vote_count - a.vote_count);
 
         const totalRow = await dbGet("SELECT COUNT(*) as count FROM members WHERE role = 'voter'");
         const totalVoters = parseInt(totalRow.count);
@@ -257,17 +279,149 @@ router.get('/results/:electionId', authenticateToken, requireRole('admin'), asyn
         `, [electionId]);
         const votedCount = parseInt(votedRow.count);
 
+        // 紙投票受付数
+        const paperVotedRow = await dbGet(`
+            SELECT COUNT(*) as count FROM voting_status 
+            WHERE election_id = ? AND status = 'voted_paper'
+        `, [electionId]);
+        const paperVotedCount = parseInt(paperVotedRow.count);
+
+        // 紙投票結果入力数
+        const paperResultTotalRow = await dbGet(`
+            SELECT COALESCE(SUM(vote_count), 0) as total FROM paper_vote_results WHERE election_id = ?
+        `, [electionId]);
+        const paperResultTotal = parseInt(paperResultTotalRow.total);
+
         res.json({
             election: { id: electionId, title: election.title, type: election.type, start_datetime: election.start_datetime, end_datetime: election.end_datetime },
             results,
+            electronic_results: electronicResults,
+            paper_results: paperResults,
             statistics: {
                 total_voters: totalVoters,
                 voted_count: votedCount,
-                turnout_rate: totalVoters > 0 ? (votedCount / totalVoters * 100).toFixed(1) : '0.0'
+                turnout_rate: totalVoters > 0 ? (votedCount / totalVoters * 100).toFixed(1) : '0.0',
+                paper_voted_count: paperVotedCount,
+                paper_result_total: paperResultTotal,
+                paper_count_match: paperVotedCount === paperResultTotal
             }
         });
     } catch (err) {
         console.error('結果取得エラー:', err);
+        res.status(500).json({ error: 'サーバーエラー' });
+    }
+});
+
+// POST /api/admin/paper-results/:electionId - 紙投票結果の反映
+router.post('/paper-results/:electionId', authenticateToken, requireRole('admin', 'reception'), async (req, res) => {
+    try {
+        const { electionId } = req.params;
+        const { results } = req.body; // [{ candidate_name, vote_count }]
+
+        const election = await dbGet('SELECT * FROM elections WHERE id = ?', [electionId]);
+        if (!election) return res.status(404).json({ error: '投票が見つかりません。' });
+
+        if (election.status !== 'counted') {
+            return res.status(400).json({ error: '紙投票結果の反映は開票後にのみ実行できます。' });
+        }
+
+        if (!results || !Array.isArray(results)) {
+            return res.status(400).json({ error: '紙投票結果データが不正です。' });
+        }
+
+        // 紙投票受付総数の取得
+        const paperVotedRow = await dbGet(`
+            SELECT COUNT(*) as count FROM voting_status 
+            WHERE election_id = ? AND status = 'voted_paper'
+        `, [electionId]);
+        const paperVotedCount = parseInt(paperVotedRow.count);
+
+        // 入力された票数の合計
+        const inputTotal = results.reduce((sum, r) => sum + (parseInt(r.vote_count) || 0), 0);
+
+        // 既存の紙投票結果を削除して再登録
+        await dbRun('DELETE FROM paper_vote_results WHERE election_id = ?', [electionId]);
+
+        for (const r of results) {
+            if (parseInt(r.vote_count) > 0) {
+                await dbRun(
+                    'INSERT INTO paper_vote_results (election_id, candidate_name, vote_count, registered_by) VALUES (?, ?, ?, ?)',
+                    [electionId, r.candidate_name, parseInt(r.vote_count), req.user.employee_id]
+                );
+            }
+        }
+
+        // 紙投票結果をvotesテーブルにも反映（既存の紙投票分を削除して再登録）
+        await dbRun("DELETE FROM votes WHERE election_id = ? AND vote_source = 'paper'", [electionId]);
+        for (const r of results) {
+            const count = parseInt(r.vote_count) || 0;
+            for (let i = 0; i < count; i++) {
+                const voteId = uuidv4();
+                await dbRun(
+                    "INSERT INTO votes (id, election_id, selected_candidate, vote_source) VALUES (?, ?, ?, 'paper')",
+                    [voteId, electionId, r.candidate_name]
+                );
+            }
+        }
+
+        await writeAuditLog({
+            action: 'paper_results_registered',
+            actorId: req.user.employee_id,
+            electionId: electionId,
+            details: JSON.stringify({
+                results,
+                input_total: inputTotal,
+                paper_voted_count: paperVotedCount,
+                count_match: inputTotal === paperVotedCount
+            }),
+            ipAddress: req.ip
+        });
+
+        const countMatch = inputTotal === paperVotedCount;
+
+        res.json({
+            success: true,
+            message: countMatch
+                ? `紙投票結果を反映しました。受付総数(${paperVotedCount}票)と入力総数(${inputTotal}票)が一致しています。`
+                : `⚠️ 紙投票結果を反映しましたが、受付総数(${paperVotedCount}票)と入力総数(${inputTotal}票)が一致していません。確認してください。`,
+            count_match: countMatch,
+            paper_voted_count: paperVotedCount,
+            input_total: inputTotal
+        });
+    } catch (err) {
+        console.error('紙投票結果反映エラー:', err);
+        res.status(500).json({ error: 'サーバーエラー' });
+    }
+});
+
+// GET /api/admin/voting-status/:electionId - 投票状況一覧
+router.get('/voting-status/:electionId', authenticateToken, requireRole('admin', 'reception'), async (req, res) => {
+    try {
+        const { electionId } = req.params;
+        const { filter } = req.query; // 'all', 'voted', 'not_voted'
+
+        let query = `
+            SELECT m.employee_id, m.name, 
+                   COALESCE(vs.status, 'not_voted') as voting_status,
+                   vs.voted_at
+            FROM members m
+            LEFT JOIN voting_status vs ON m.employee_id = vs.employee_id AND vs.election_id = ?
+            WHERE m.role = 'voter'
+        `;
+
+        if (filter === 'voted') {
+            query += " AND vs.status IN ('voted_electronic', 'voted_paper')";
+        } else if (filter === 'not_voted') {
+            query += " AND (vs.status = 'not_voted' OR vs.status IS NULL)";
+        }
+
+        query += ' ORDER BY m.employee_id ASC';
+
+        const members = await dbAll(query, [electionId]);
+
+        res.json(members);
+    } catch (err) {
+        console.error('投票状況取得エラー:', err);
         res.status(500).json({ error: 'サーバーエラー' });
     }
 });
@@ -352,13 +506,14 @@ router.post('/import-members', authenticateToken, requireRole('admin'), async (r
         // ヘッダー検証
         if (!header.includes('employee_id') || !header.includes('name')) {
             return res.status(400).json({
-                error: 'CSVヘッダーが不正です。employee_id, birthdate, name, role が必要です。'
+                error: 'CSVヘッダーが不正です。employee_id, login_pin, name, role が必要です。'
             });
         }
 
         const headers = header.split(',').map(h => h.trim());
         const idIdx = headers.indexOf('employee_id');
-        const birthIdx = headers.indexOf('birthdate');
+        const pinIdx = headers.indexOf('login_pin');
+        const birthIdx = headers.indexOf('birthdate'); // 後方互換
         const nameIdx = headers.indexOf('name');
         const roleIdx = headers.indexOf('role');
 
@@ -374,7 +529,13 @@ router.post('/import-members', authenticateToken, requireRole('admin'), async (r
             const cols = lines[i].split(',').map(c => c.trim());
 
             const empId = cols[idIdx];
-            const birthdate = birthIdx !== -1 ? cols[birthIdx] : '19900101';
+            // login_pin列があればそれを使い、なければbirthdate列を使い、それもなければデフォルト
+            let loginPin = '0000';
+            if (pinIdx !== -1) {
+                loginPin = cols[pinIdx];
+            } else if (birthIdx !== -1) {
+                loginPin = cols[birthIdx];
+            }
             const name = cols[nameIdx];
             const role = roleIdx !== -1 ? cols[roleIdx] : 'voter';
 
@@ -386,12 +547,8 @@ router.post('/import-members', authenticateToken, requireRole('admin'), async (r
                 errors.push(`行${i + 1}: role が不正です (${role})`);
                 continue;
             }
-            if (birthdate && !/^\d{8}$/.test(birthdate)) {
-                errors.push(`行${i + 1}: birthdate の形式が不正です (${birthdate})`);
-                continue;
-            }
 
-            members.push({ employee_id: empId, birthdate, name, role });
+            members.push({ employee_id: empId, login_pin: loginPin, name, role });
         }
 
         if (members.length === 0) {
@@ -414,12 +571,12 @@ router.post('/import-members', authenticateToken, requireRole('admin'), async (r
                 const existing = await dbGet('SELECT employee_id FROM members WHERE employee_id = ?', [m.employee_id]);
                 if (existing) {
                     // 既存メンバーは更新
-                    await dbRun('UPDATE members SET birthdate = ?, name = ?, role = ? WHERE employee_id = ?',
-                        [m.birthdate, m.name, m.role, m.employee_id]);
+                    await dbRun('UPDATE members SET login_pin = ?, name = ?, role = ? WHERE employee_id = ?',
+                        [m.login_pin, m.name, m.role, m.employee_id]);
                     inserted++;
                 } else {
-                    await dbRun('INSERT INTO members (employee_id, birthdate, name, role) VALUES (?, ?, ?, ?)',
-                        [m.employee_id, m.birthdate, m.name, m.role]);
+                    await dbRun('INSERT INTO members (employee_id, login_pin, name, role) VALUES (?, ?, ?, ?)',
+                        [m.employee_id, m.login_pin, m.name, m.role]);
                     inserted++;
                 }
             } catch (e) {

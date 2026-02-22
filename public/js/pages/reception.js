@@ -1,10 +1,10 @@
 // ===== Reception Page (受付担当) =====
 const ReceptionPage = {
-    currentElection: null,
+  currentElection: null,
 
-    async render(container) {
-        const user = API.getUser();
-        container.innerHTML = Components.navbar(user) + `
+  async render(container) {
+    const user = API.getUser();
+    container.innerHTML = Components.navbar(user) + `
       <div class="main-content">
         <div class="page-header">
           <h1 class="page-title">受付ダッシュボード</h1>
@@ -26,6 +26,19 @@ const ReceptionPage = {
           <div id="stats-grid" class="stats-grid mb-2"></div>
         </div>
 
+        <!-- 投票状況一覧 -->
+        <div class="card mb-2" id="voting-status-card" style="display: none;">
+          <div class="card-header">
+            <div class="card-title">📊 投票状況一覧</div>
+            <div class="flex gap-1">
+              <button class="btn btn-sm btn-secondary" onclick="ReceptionPage.loadVotingStatus('all')" id="filter-all-btn">全て</button>
+              <button class="btn btn-sm btn-success" onclick="ReceptionPage.loadVotingStatus('voted')" id="filter-voted-btn">投票済み</button>
+              <button class="btn btn-sm btn-warning" onclick="ReceptionPage.loadVotingStatus('not_voted')" id="filter-notvoted-btn">未投票</button>
+            </div>
+          </div>
+          <div id="voting-status-list"></div>
+        </div>
+
         <!-- 検索・受付 -->
         <div class="card" id="search-card" style="display: none;">
           <div class="card-header">
@@ -40,25 +53,25 @@ const ReceptionPage = {
       </div>
     `;
 
-        await this.loadElections();
-    },
+    await this.loadElections();
+  },
 
-    async loadElections() {
-        try {
-            const elections = await API.get('/reception/elections');
-            const selectorEl = document.getElementById('election-selector');
+  async loadElections() {
+    try {
+      const elections = await API.get('/reception/elections');
+      const selectorEl = document.getElementById('election-selector');
 
-            if (elections.length === 0) {
-                selectorEl.innerHTML = `
+      if (elections.length === 0) {
+        selectorEl.innerHTML = `
           <div class="empty-state" style="padding: 1.5rem;">
             <div class="empty-state-icon">📭</div>
             <div class="empty-state-title">現在アクティブな投票はありません</div>
           </div>
         `;
-                return;
-            }
+        return;
+      }
 
-            selectorEl.innerHTML = `
+      selectorEl.innerHTML = `
         <div style="display: flex; flex-direction: column; gap: 0.5rem;">
           ${elections.map(e => `
             <div class="election-card" style="margin-bottom: 0; cursor: pointer;" onclick="ReceptionPage.selectElection('${e.id}', '${Components.escapeHtml(e.title).replace(/'/g, "\\'")}')">
@@ -78,29 +91,31 @@ const ReceptionPage = {
           `).join('')}
         </div>
       `;
-        } catch (err) {
-            Components.showToast(err.message, 'error');
-        }
-    },
+    } catch (err) {
+      Components.showToast(err.message, 'error');
+    }
+  },
 
-    async selectElection(electionId, title) {
-        this.currentElection = { id: electionId, title };
+  async selectElection(electionId, title) {
+    this.currentElection = { id: electionId, title };
 
-        document.getElementById('election-selector-card').querySelector('.card-title').innerHTML =
-            `📋 対象投票: <span style="color: var(--color-text-accent)">${title}</span>`;
+    document.getElementById('election-selector-card').querySelector('.card-title').innerHTML =
+      `📋 対象投票: <span style="color: var(--color-text-accent)">${title}</span>`;
 
-        document.getElementById('search-card').style.display = 'block';
-        document.getElementById('stats-section').classList.remove('hidden');
+    document.getElementById('search-card').style.display = 'block';
+    document.getElementById('stats-section').classList.remove('hidden');
+    document.getElementById('voting-status-card').style.display = 'block';
 
-        await this.loadStats();
-    },
+    await this.loadStats();
+    await this.loadVotingStatus('all');
+  },
 
-    async loadStats() {
-        if (!this.currentElection) return;
+  async loadStats() {
+    if (!this.currentElection) return;
 
-        try {
-            const stats = await API.get(`/reception/stats/${this.currentElection.id}`);
-            document.getElementById('stats-grid').innerHTML = `
+    try {
+      const stats = await API.get(`/reception/stats/${this.currentElection.id}`);
+      document.getElementById('stats-grid').innerHTML = `
         <div class="stat-card">
           <div class="stat-value accent">${stats.total}</div>
           <div class="stat-label">有権者数</div>
@@ -122,47 +137,116 @@ const ReceptionPage = {
           <div class="stat-label">投票率</div>
         </div>
       `;
-        } catch (err) {
-            Components.showToast(err.message, 'error');
-        }
-    },
+    } catch (err) {
+      Components.showToast(err.message, 'error');
+    }
+  },
 
-    // 検索デバウンス
-    searchTimeout: null,
-    debouncedSearch() {
-        clearTimeout(this.searchTimeout);
-        this.searchTimeout = setTimeout(() => this.search(), 300);
-    },
+  // 投票状況一覧の読み込み
+  currentFilter: 'all',
+  async loadVotingStatus(filter) {
+    if (!this.currentElection) return;
+    this.currentFilter = filter;
 
-    async search() {
-        const query = document.getElementById('member-search').value.trim();
-        const resultsEl = document.getElementById('search-results');
+    // ボタンのアクティブ状態を更新
+    ['all', 'voted', 'not_voted'].forEach(f => {
+      const prefix = f === 'not_voted' ? 'notvoted' : f;
+      const btn = document.getElementById(`filter-${prefix}-btn`);
+      if (btn) {
+        btn.classList.toggle('btn-active', f === filter);
+      }
+    });
 
-        if (query.length === 0) {
-            resultsEl.innerHTML = '';
-            return;
-        }
+    const listEl = document.getElementById('voting-status-list');
+    listEl.innerHTML = Components.loading();
 
-        try {
-            const members = await API.get(`/reception/search?q=${encodeURIComponent(query)}`);
+    try {
+      const endpoint = filter === 'all'
+        ? `/reception/voting-status/${this.currentElection.id}`
+        : `/reception/voting-status/${this.currentElection.id}?filter=${filter}`;
+      const members = await API.get(endpoint);
 
-            if (members.length === 0) {
-                resultsEl.innerHTML = `
+      if (members.length === 0) {
+        listEl.innerHTML = `
+                    <div class="empty-state" style="padding: 1.5rem;">
+                        <div class="empty-state-title">該当する組合員はいません</div>
+                    </div>
+                `;
+        return;
+      }
+
+      const votedCount = members.filter(m => m.voting_status === 'voted_electronic' || m.voting_status === 'voted_paper').length;
+      const notVotedCount = members.filter(m => m.voting_status === 'not_voted' || !m.voting_status).length;
+
+      listEl.innerHTML = `
+                <div style="padding: 0.75rem 1rem; font-size: 0.85rem; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border);">
+                    表示中: ${members.length}名 
+                    ${filter === 'all' ? `（投票済み: ${votedCount}名 / 未投票: ${notVotedCount}名）` : ''}
+                </div>
+                <div class="table-container" style="max-height: 400px; overflow-y: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>職員番号</th>
+                                <th>氏名</th>
+                                <th>投票状況</th>
+                                <th>投票日時</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${members.map(m => `
+                                <tr>
+                                    <td style="font-weight: 600;">${Components.escapeHtml(m.employee_id)}</td>
+                                    <td>${Components.escapeHtml(m.name)}</td>
+                                    <td>${Components.statusBadge(m.voting_status || 'not_voted')}</td>
+                                    <td style="font-size: 0.8rem; color: var(--color-text-muted);">${m.voted_at ? Components.formatDateTime(m.voted_at) : '-'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+    } catch (err) {
+      listEl.innerHTML = `<div class="empty-state" style="padding: 1rem;"><p class="text-danger">${Components.escapeHtml(err.message)}</p></div>`;
+    }
+  },
+
+  // 検索デバウンス
+  searchTimeout: null,
+  debouncedSearch() {
+    clearTimeout(this.searchTimeout);
+    this.searchTimeout = setTimeout(() => this.search(), 300);
+  },
+
+  async search() {
+    const query = document.getElementById('member-search').value.trim();
+    const resultsEl = document.getElementById('search-results');
+
+    if (query.length === 0) {
+      resultsEl.innerHTML = '';
+      return;
+    }
+
+    try {
+      const members = await API.get(`/reception/search?q=${encodeURIComponent(query)}`);
+
+      if (members.length === 0) {
+        resultsEl.innerHTML = `
           <div class="empty-state" style="padding: 1.5rem;">
             <div class="empty-state-title">該当する組合員が見つかりません</div>
           </div>
         `;
-                return;
-            }
+        return;
+      }
 
-            // 各メンバーのステータスを取得
-            const statusPromises = members.map(m =>
-                API.get(`/reception/status/${m.employee_id}/${this.currentElection.id}`)
-                    .catch(() => ({ status: 'unknown' }))
-            );
-            const statuses = await Promise.all(statusPromises);
+      // 各メンバーのステータスを取得
+      const statusPromises = members.map(m =>
+        API.get(`/reception/status/${m.employee_id}/${this.currentElection.id}`)
+          .catch(() => ({ status: 'unknown' }))
+      );
+      const statuses = await Promise.all(statusPromises);
 
-            resultsEl.innerHTML = `
+      resultsEl.innerHTML = `
         <div class="table-container">
           <table>
             <thead>
@@ -175,9 +259,9 @@ const ReceptionPage = {
             </thead>
             <tbody>
               ${members.map((m, i) => {
-                const s = statuses[i];
-                const canAccept = s.status === 'not_voted';
-                return `
+        const s = statuses[i];
+        const canAccept = s.status === 'not_voted';
+        return `
                   <tr>
                     <td style="font-weight: 600;">${Components.escapeHtml(m.employee_id)}</td>
                     <td>${Components.escapeHtml(m.name)}</td>
@@ -193,18 +277,18 @@ const ReceptionPage = {
                     </td>
                   </tr>
                 `;
-            }).join('')}
+      }).join('')}
             </tbody>
           </table>
         </div>
       `;
-        } catch (err) {
-            Components.showToast(err.message, 'error');
-        }
-    },
+    } catch (err) {
+      Components.showToast(err.message, 'error');
+    }
+  },
 
-    confirmPaperVote(employeeId, name) {
-        Components.showModal(`
+  confirmPaperVote(employeeId, name) {
+    Components.showModal(`
       <div class="modal-header">
         <div class="modal-icon modal-icon-warning">📄</div>
         <div class="modal-title">紙投票受付の確認</div>
@@ -236,29 +320,30 @@ const ReceptionPage = {
         </button>
       </div>
     `);
-    },
+  },
 
-    async registerPaperVote(employeeId) {
-        const btn = document.getElementById('paper-vote-btn');
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> 処理中...';
+  async registerPaperVote(employeeId) {
+    const btn = document.getElementById('paper-vote-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> 処理中...';
 
-        try {
-            const result = await API.post('/reception/paper-vote', {
-                employee_id: employeeId,
-                election_id: this.currentElection.id
-            });
+    try {
+      const result = await API.post('/reception/paper-vote', {
+        employee_id: employeeId,
+        election_id: this.currentElection.id
+      });
 
-            Components.closeModal();
-            Components.showToast(result.message, 'success');
+      Components.closeModal();
+      Components.showToast(result.message, 'success');
 
-            // 検索結果とステータスを更新
-            await this.search();
-            await this.loadStats();
-        } catch (err) {
-            Components.showToast(err.message, 'error');
-            btn.disabled = false;
-            btn.innerHTML = '受付を確定する';
-        }
+      // 検索結果とステータスを更新
+      await this.search();
+      await this.loadStats();
+      await this.loadVotingStatus(this.currentFilter);
+    } catch (err) {
+      Components.showToast(err.message, 'error');
+      btn.disabled = false;
+      btn.innerHTML = '受付を確定する';
     }
+  }
 };

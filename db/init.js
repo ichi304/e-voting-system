@@ -35,7 +35,7 @@ async function initDatabases() {
 
   pool = new Pool({
     connectionString,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    ssl: { rejectUnauthorized: false },
     max: 10,
   });
 
@@ -53,25 +53,57 @@ async function initDatabases() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS members (
       employee_id TEXT PRIMARY KEY,
-      birthdate TEXT NOT NULL,
+      login_pin TEXT NOT NULL,
       name TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'voter' CHECK(role IN ('admin', 'reception', 'voter')),
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
+  // 旧テーブルからのマイグレーション: birthdate列が存在する場合はlogin_pinに名前変更
+  try {
+    const colCheck = await pool.query(`
+      SELECT column_name FROM information_schema.columns 
+      WHERE table_name = 'members' AND column_name = 'birthdate'
+    `);
+    if (colCheck.rows.length > 0) {
+      await pool.query('ALTER TABLE members RENAME COLUMN birthdate TO login_pin');
+      console.log('✅ birthdate 列を login_pin に名前変更しました');
+    }
+  } catch (e) {
+    // 既にlogin_pinの場合は無視
+  }
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS elections (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       description TEXT,
-      type TEXT NOT NULL CHECK(type IN ('officer', 'strike', 'agenda', 'confidence')),
+      type TEXT NOT NULL CHECK(type IN ('strike', 'agenda', 'confidence')),
       start_datetime TEXT NOT NULL,
       end_datetime TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'upcoming' CHECK(status IN ('upcoming', 'active', 'closed', 'counted')),
+      detail_url TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // detail_url列が無い場合は追加
+  try {
+    const colCheck = await pool.query(`
+      SELECT column_name FROM information_schema.columns 
+      WHERE table_name = 'elections' AND column_name = 'detail_url'
+    `);
+    if (colCheck.rows.length === 0) {
+      await pool.query('ALTER TABLE elections ADD COLUMN detail_url TEXT');
+      console.log('✅ elections テーブルに detail_url 列を追加しました');
+    }
+  } catch (e) {
+    // 無視
+  }
+
+  // type制約をofficerを含まないように更新（既存データがあるので柔軟に対応）
+  // PostgreSQLはALTER CONSTRAINT が面倒なので、既存の制約は残して新規作成時にフロントで制御
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS election_candidates (
@@ -98,7 +130,34 @@ async function initDatabases() {
       id TEXT PRIMARY KEY,
       election_id TEXT NOT NULL,
       selected_candidate TEXT NOT NULL,
+      vote_source TEXT NOT NULL DEFAULT 'electronic',
       voted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // vote_source列が無い場合は追加
+  try {
+    const colCheck = await pool.query(`
+      SELECT column_name FROM information_schema.columns 
+      WHERE table_name = 'votes' AND column_name = 'vote_source'
+    `);
+    if (colCheck.rows.length === 0) {
+      await pool.query("ALTER TABLE votes ADD COLUMN vote_source TEXT NOT NULL DEFAULT 'electronic'");
+      console.log('✅ votes テーブルに vote_source 列を追加しました');
+    }
+  } catch (e) {
+    // 無視
+  }
+
+  // 紙投票集計テーブル（開票後に紙投票の結果を反映する）
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS paper_vote_results (
+      id SERIAL PRIMARY KEY,
+      election_id TEXT NOT NULL REFERENCES elections(id),
+      candidate_name TEXT NOT NULL,
+      vote_count INTEGER NOT NULL DEFAULT 0,
+      registered_by TEXT NOT NULL,
+      registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
 

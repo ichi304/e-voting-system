@@ -147,7 +147,7 @@ router.post('/submit', authenticateToken, requireRole('voter'), async (req, res)
         for (const selection of selections) {
             const voteId = uuidv4();
             await dbRun(
-                'INSERT INTO votes (id, election_id, selected_candidate) VALUES (?, ?, ?)',
+                "INSERT INTO votes (id, election_id, selected_candidate, vote_source) VALUES (?, ?, ?, 'electronic')",
                 [voteId, election_id, selection]
             );
         }

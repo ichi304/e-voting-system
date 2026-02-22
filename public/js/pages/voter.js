@@ -70,6 +70,13 @@ const VoterPage = {
             </div>
           </div>
           ${election.description ? `<div class="election-description">${Components.escapeHtml(election.description)}</div>` : ''}
+          ${election.type === 'agenda' && election.detail_url ? `
+            <div class="detail-link-banner">
+              <a href="${Components.escapeHtml(election.detail_url)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();">
+                📄 詳細はこちら（審議資料を確認する）
+              </a>
+            </div>
+          ` : ''}
           <div class="election-meta">
             <div class="election-meta-item">📅 ${Components.formatDateTime(election.start_datetime)}</div>
             <div class="election-meta-item">→</div>
@@ -163,6 +170,14 @@ const VoterPage = {
           </div>
           ${Components.statusBadge(election.status)}
         </div>
+
+        ${election.type === 'agenda' && election.detail_url ? `
+          <div class="detail-link-banner" style="margin-bottom: 1rem;">
+            <a href="${Components.escapeHtml(election.detail_url)}" target="_blank" rel="noopener noreferrer">
+              📄 議案の詳細資料はこちら →
+            </a>
+          </div>
+        ` : ''}
 
         <div style="margin-bottom: 1.25rem;">
           <div class="election-meta">
