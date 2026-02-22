@@ -1580,7 +1580,7 @@ textarea.form-input {
   background: rgba(59, 130, 246, 0.06);
   border: 1px solid rgba(59, 130, 246, 0.15);
   border-radius: var(--radius-md);
-  text-align: center;
+  text-align: left;
 }
 
 .login-contact-title {

@@ -44,16 +44,14 @@ const LoginPage = {
           <div class="login-contact-info">
             <div class="login-contact-title">📞 お問い合わせ</div>
             <p>
-              職員番号またはログインパスワードをお忘れの場合は、<br>
-              下記までお電話にてお問い合わせください。
+              職員番号またはログインパスワードをお忘れの場合は、下記までお電話にてお問い合わせください。
             </p>
             <div class="login-contact-org">那覇市職員労働組合</div>
             <div class="login-contact-tel">
               <a href="tel:098-867-0230">☎ 098-867-0230</a>
             </div>
             <p class="login-contact-note">
-              ※ セキュリティ上の理由により、メールでのお問い合わせには<br>
-              対応しておりません。お電話のみでの受付となります。
+              ※ セキュリティ上の理由により、メールでのお問い合わせには対応しておりません。お電話のみでの受付となります。
             </p>
           </div>
           <div style="margin-top: 1.5rem; text-align: center; font-size: 0.75rem; color: var(--color-text-muted);">
